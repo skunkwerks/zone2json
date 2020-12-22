@@ -4,6 +4,8 @@ const zone2json = @import("zone2json.zig");
 const bytes = amqp.bytes_t.init;
 
 pub fn main() !void {
+    const alloc = std.heap.c_allocator;
+
     const hostname = "localhost";
     const port = 5672;
     const exchange = "";
@@ -48,9 +50,10 @@ pub fn main() !void {
         }
         const correlation_id = envelope.message.properties.correlation_id;
 
-        var json = std.ArrayList(u8).init(std.heap.c_allocator);
+        var json = try std.ArrayList(u8).initCapacity(alloc, 4096);
         defer json.deinit();
-        try zone2json.convertMem(envelope.message.body.slice().?, json.writer());
+
+        try zone2json.convertApi(envelope.message.body.slice().?, &json);
 
         var props: amqp.basic_properties_t = undefined;
         props._flags = amqp.basic_properties_t.CORRELATION_ID_FLAG | amqp.basic_properties_t.CONTENT_TYPE_FLAG;

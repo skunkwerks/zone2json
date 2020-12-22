@@ -1,10 +1,10 @@
 const std = @import("std");
-const ldns = @import("zdns");
 const c = std.c;
 const json = std.json;
+const ldns = @import("zdns");
 const testing = std.testing;
 
-pub fn rrFieldNames(type_: ldns.rr_type) []const []const u8 {
+pub fn rrFieldNames(type_: ldns.rr_type, ctx: anytype) ![]const []const u8 {
     const str = []const u8;
     return switch (type_) {
         .A, .AAAA => &[_]str{"ip"},
@@ -38,37 +38,35 @@ pub fn rrFieldNames(type_: ldns.rr_type) []const []const u8 {
         .TSIG => &[_]str{ "alg", "time", "fudge", "mac", "msgid", "err", "other" },
         .TXT => &[_]str{"txt"},
         else => {
-            const buf = ldns.buffer.new(32) catch @panic("oom");
-            const status = type_.appendStr(buf);
-            status.ok() catch @panic(std.mem.span(status.get_errorstr()));
-            std.debug.panic("unsupported record type: {s}", .{buf.data()});
+            const buf = try ldns.buffer.new(16);
+            defer buf.free();
+            try ctx.ok(type_.appendStr(buf));
+            try ctx.err_writer.print("error: unsupported record type: {s}", .{buf.data()});
+            return error.UnsupportedRecordType;
         },
     };
 }
 
-pub fn emitRdf(rdf: *ldns.rdf, out: anytype, tmp_buf: *ldns.buffer) !void {
-    switch (rdf.get_type()) {
-        .INT32, .PERIOD => try out.emitNumber(rdf.int32()),
-        .INT16 => try out.emitNumber(rdf.int16()),
-        .INT8 => try out.emitNumber(rdf.int8()),
-        .DNAME => {
-            try rdf.appendStr(tmp_buf).ok();
-            const data = tmp_buf.data();
-            // strip the trailing dot
-            try out.emitString(data[0 .. data.len - 1]);
-            tmp_buf.clear();
-        },
-        .STR => {
-            try rdf.appendStr(tmp_buf).ok();
-            const data = tmp_buf.data();
-            // strip the quotes
-            try out.emitString(data[1 .. data.len - 1]);
-            tmp_buf.clear();
-        },
+pub fn emitRdf(rdf: *ldns.rdf, ctx: anytype) !void {
+    const type_ = rdf.get_type();
+    switch (type_) {
+        .INT32, .PERIOD => try ctx.out.emitNumber(rdf.int32()),
+        .INT16 => try ctx.out.emitNumber(rdf.int16()),
+        .INT8 => try ctx.out.emitNumber(rdf.int8()),
         else => {
-            try rdf.appendStr(tmp_buf).ok();
-            try out.emitString(tmp_buf.data());
-            tmp_buf.clear();
+            try ctx.ok(rdf.appendStr(ctx.tmp_buf));
+            var text = ctx.tmp_buf.data();
+
+            switch (type_) {
+                // strip the trailing dot
+                .DNAME => text = text[0 .. text.len - 1],
+                // strip the quotes
+                .STR => text = text[1 .. text.len - 1],
+                else => {},
+            }
+
+            try ctx.out.emitString(text);
+            ctx.tmp_buf.clear();
         },
     }
 }
@@ -78,14 +76,20 @@ fn testRdf(type_: ldns.rdf_type, expected_out: []const u8, in: [*:0]const u8) !v
     var bufStream = std.io.fixedBufferStream(&outBuf);
     var out = json.writeStream(bufStream.writer(), 6);
 
+    var errBuf: [4096]u8 = undefined;
+    var errStream = std.io.fixedBufferStream(&outBuf);
+
     const buf = try ldns.buffer.new(4096);
     defer buf.free();
 
-    const rdf = try ldns.rdf.new_frm_str(type_, in);
+    const rdf = ldns.rdf.new_frm_str(type_, in) orelse return error.LdnsError;
     defer rdf.deep_free();
 
-    try emitRdf(rdf, &out, buf);
+    var ctx = Context(@TypeOf(&out), @TypeOf(errStream.writer())){ .out = &out, .err_writer = errStream.writer(), .tmp_buf = buf };
+
+    try emitRdf(rdf, &ctx);
     testing.expectEqualStrings(expected_out, bufStream.getWritten());
+    testing.expectEqual(@as(usize, 0), errStream.getWritten().len);
 }
 
 test "emitRdf" {
@@ -104,42 +108,45 @@ test "emitRdf" {
     testing.expectError(error.LdnsError, testRdf(.INT32, "", "bogus"));
 }
 
-pub fn emitRr(rr: *ldns.rr, out: anytype, tmp_buf: *ldns.buffer) !void {
+pub fn emitRr(rr: *ldns.rr, ctx: anytype) !void {
     const type_ = rr.get_type();
 
-    try out.beginObject();
+    try ctx.out.beginObject();
 
-    try out.objectField("name");
-    try emitRdf(rr.owner(), out, tmp_buf);
+    try ctx.out.objectField("name");
+    try emitRdf(rr.owner(), ctx);
 
-    try out.objectField("type");
-    try type_.appendStr(tmp_buf).ok();
-    try out.emitString(tmp_buf.data());
-    tmp_buf.clear();
+    try ctx.out.objectField("type");
+    try ctx.ok(type_.appendStr(ctx.tmp_buf));
+    try ctx.out.emitString(ctx.tmp_buf.data());
+    ctx.tmp_buf.clear();
 
-    try out.objectField("ttl");
-    try out.emitNumber(rr.ttl());
+    try ctx.out.objectField("ttl");
+    try ctx.out.emitNumber(rr.ttl());
 
-    try out.objectField("data");
-    try out.beginObject();
+    try ctx.out.objectField("data");
+    try ctx.out.beginObject();
 
-    const fieldNames = rrFieldNames(type_);
+    const fieldNames = try rrFieldNames(type_, ctx);
 
     const rdf_count = rr.rd_count();
     var rdf_index: usize = 0;
     while (rdf_index < rdf_count) : (rdf_index += 1) {
-        try out.objectField(fieldNames[rdf_index]);
-        try emitRdf(rr.rdf(rdf_index), out, tmp_buf);
+        try ctx.out.objectField(fieldNames[rdf_index]);
+        try emitRdf(rr.rdf(rdf_index), ctx);
     }
 
-    try out.endObject();
-    try out.endObject();
+    try ctx.out.endObject();
+    try ctx.out.endObject();
 }
 
 fn testRr(expected_out: []const u8, in: [*:0]const u8) !void {
     var outBuf: [4096]u8 = undefined;
     var bufStream = std.io.fixedBufferStream(&outBuf);
     var out = json.writeStream(bufStream.writer(), 6);
+
+    var errBuf: [4096]u8 = undefined;
+    var errStream = std.io.fixedBufferStream(&outBuf);
 
     const buf = try ldns.buffer.new(4096);
     defer buf.free();
@@ -150,8 +157,11 @@ fn testRr(expected_out: []const u8, in: [*:0]const u8) !void {
     };
     defer rr.free();
 
-    try emitRr(rr, &out, buf);
+    var ctx = Context(@TypeOf(&out), @TypeOf(errStream.writer())){ .out = &out, .err_writer = errStream.writer(), .tmp_buf = buf };
+
+    try emitRr(rr, &ctx);
     testing.expectEqualStrings(expected_out, bufStream.getWritten());
+    testing.expectEqual(@as(usize, 0), errStream.getWritten().len);
 }
 
 test "emitRr" {
@@ -188,52 +198,92 @@ test "emitRr" {
     testing.expectError(error.LdnsError, testRr("", "bogus"));
 }
 
-pub fn emitZone(zone: *ldns.zone, out: anytype, tmp_buf: *ldns.buffer) !void {
+pub fn emitZone(zone: *ldns.zone, ctx: anytype) !void {
     const rr_list = zone.rrs();
     const rr_count = rr_list.rr_count();
 
-    const soa = zone.soa() orelse return error.NoSoaRecord;
+    const soa = zone.soa() orelse {
+        try ctx.err_writer.print("error: no SOA record in zone", .{});
+        return error.NoSoaRecord;
+    };
 
-    try out.beginObject();
+    try ctx.out.beginObject();
 
-    try out.objectField("name");
-    try emitRdf(soa.owner(), out, tmp_buf);
+    try ctx.out.objectField("name");
+    try emitRdf(soa.owner(), ctx);
 
-    try out.objectField("records");
-    try out.beginArray();
+    try ctx.out.objectField("records");
+    try ctx.out.beginArray();
 
-    try out.arrayElem();
-    try emitRr(soa, out, tmp_buf);
+    try ctx.out.arrayElem();
+    try emitRr(soa, ctx);
 
     var rr_index: usize = 0;
     while (rr_index < rr_count) : (rr_index += 1) {
         const rr = rr_list.rr(rr_index);
-        try out.arrayElem();
-        try emitRr(rr, out, tmp_buf);
+        try ctx.out.arrayElem();
+        try emitRr(rr, ctx);
     }
-    try out.endArray();
-    try out.endObject();
+    try ctx.out.endArray();
+    try ctx.out.endObject();
 }
 
-pub fn convertCFile(file: *c.FILE, writer: anytype) !void {
+pub fn Context(comptime Writer: type, comptime ErrWriter: type) type {
+    return struct {
+        out: Writer,
+        err_writer: ErrWriter,
+        tmp_buf: *ldns.buffer,
+
+        pub fn ok(self: *@This(), status: ldns.status) !void {
+            if (status != .OK) {
+                try self.err_writer.print("internal error: {s}", .{status.get_errorstr()});
+                return error.UnexpectedError;
+            }
+        }
+    };
+}
+
+pub fn convertCFile(file: *c.FILE, json_writer: anytype, err_writer: anytype) !void {
     const zone = switch (ldns.zone.new_frm_fp(file, null, 0, .IN)) {
         .ok => |z| z,
-        .err => |err| std.debug.panic("loading zone failed on line {}: {s}", .{ err.line, err.code.get_errorstr() }),
+        .err => |err| {
+            try err_writer.print("error: parsing zone failed on line {}: {s}", .{ err.line, err.code.get_errorstr() });
+            return error.ParseError;
+        },
     };
     defer zone.deep_free();
-
-    var out = json.writeStream(writer, 6);
 
     const buf = try ldns.buffer.new(4096);
     defer buf.free();
 
-    try emitZone(zone, &out, buf);
+    var ctx = Context(@TypeOf(json_writer), @TypeOf(err_writer)){ .out = json_writer, .err_writer = err_writer, .tmp_buf = buf };
+    try emitZone(zone, &ctx);
 }
 
-extern "c" fn fmemopen(noalias buf: ?[*]u8, size: usize, noalias mode: [*:0]const u8) ?*c.FILE;
+extern "c" fn fmemopen(noalias buf: ?*c_void, size: usize, noalias mode: [*:0]const u8) ?*c.FILE;
 
-pub fn convertMem(zone: []const u8, writer: anytype) !void {
-    const file = fmemopen(@intToPtr(?[*]u8, @ptrToInt(zone.ptr)), zone.len, "r") orelse return error.SystemResources;
+pub fn convertMem(zone: []const u8, json_writer: anytype, err_writer: anytype) !void {
+    const file = fmemopen(@intToPtr(?*c_void, @ptrToInt(zone.ptr)), zone.len, "r") orelse return error.SystemResources;
     defer _ = c.fclose(file);
-    return convertCFile(file, writer);
+    return convertCFile(file, json_writer, err_writer);
+}
+
+pub fn convertApi(zone: []const u8, json_out: *std.ArrayList(u8)) !void {
+    var err_buf: [256]u8 = undefined;
+    var err_stream = std.io.fixedBufferStream(&err_buf);
+
+    var json_writer = std.json.writeStream(json_out.writer(), 10);
+    try json_writer.beginObject();
+    try json_writer.objectField("ok");
+    convertMem(zone, &json_writer, err_stream.writer()) catch |err| switch (err) {
+        error.OutOfMemory, error.SystemResources, error.NoSpaceLeft, error.UnexpectedError => return err,
+        error.ParseError, error.UnsupportedRecordType, error.NoSoaRecord => {
+            json_out.shrinkRetainingCapacity(0);
+            json_writer = std.json.writeStream(json_out.writer(), 10);
+            try json_writer.beginObject();
+            try json_writer.objectField("error");
+            try json_writer.emitString(err_stream.getWritten());
+        },
+    };
+    try json_writer.endObject();
 }
