@@ -1,0 +1,11 @@
+example.com.	86400	IN	SOA	ns1.example.com. hostmaster.example.com. 2014012401 14400 1800 1209600 3600
+example.com.	86400	IN	A	203.0.113.10
+example.com.	86400	IN	NS	ns1.example.com.
+example.com.	86400	IN	NS	ns2.example.com.
+example.com.	86400	IN	AAAA	2001:db8:beef:113::10
+ftp.example.com.	86400	IN	CNAME	example.com.
+ns1.example.com.	86400	IN	A	192.0.2.22
+ns1.example.com.	86400	IN	AAAA	2001:db8:beef:2::22
+ns2.example.com.	86400	IN	A	198.51.100.22
+ns2.example.com.	86400	IN	AAAA	2001:db8:beef:100::22
+www.example.com.	86400	IN	CNAME	example.com.

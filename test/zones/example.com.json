@@ -1,0 +1,99 @@
+{
+ "name": "example.com",
+ "records": [
+  {
+   "name": "example.com",
+   "type": "SOA",
+   "ttl": 86400,
+   "data": {
+    "mname": "ns1.example.com",
+    "rname": "hostmaster.example.com",
+    "serial": 2014012401,
+    "refresh": 14400,
+    "retry": 1800,
+    "expire": 1209600,
+    "minimum": 3600
+   }
+  },
+  {
+   "name": "example.com",
+   "type": "A",
+   "ttl": 86400,
+   "data": {
+    "ip": "203.0.113.10"
+   }
+  },
+  {
+   "name": "example.com",
+   "type": "NS",
+   "ttl": 86400,
+   "data": {
+    "dname": "ns1.example.com"
+   }
+  },
+  {
+   "name": "example.com",
+   "type": "NS",
+   "ttl": 86400,
+   "data": {
+    "dname": "ns2.example.com"
+   }
+  },
+  {
+   "name": "example.com",
+   "type": "AAAA",
+   "ttl": 86400,
+   "data": {
+    "ip": "2001:db8:beef:113::10"
+   }
+  },
+  {
+   "name": "ftp.example.com",
+   "type": "CNAME",
+   "ttl": 86400,
+   "data": {
+    "dname": "example.com"
+   }
+  },
+  {
+   "name": "ns1.example.com",
+   "type": "A",
+   "ttl": 86400,
+   "data": {
+    "ip": "192.0.2.22"
+   }
+  },
+  {
+   "name": "ns1.example.com",
+   "type": "AAAA",
+   "ttl": 86400,
+   "data": {
+    "ip": "2001:db8:beef:2::22"
+   }
+  },
+  {
+   "name": "ns2.example.com",
+   "type": "A",
+   "ttl": 86400,
+   "data": {
+    "ip": "198.51.100.22"
+   }
+  },
+  {
+   "name": "ns2.example.com",
+   "type": "AAAA",
+   "ttl": 86400,
+   "data": {
+    "ip": "2001:db8:beef:100::22"
+   }
+  },
+  {
+   "name": "www.example.com",
+   "type": "CNAME",
+   "ttl": 86400,
+   "data": {
+    "dname": "example.com"
+   }
+  }
+ ]
+}

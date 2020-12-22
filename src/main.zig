@@ -1,6 +1,6 @@
 const std = @import("std");
-const zdns = @import("zdns");
 const amqp = @import("zamqp");
+const zone2json = @import("zone2json.zig");
 const bytes = amqp.bytes_t.init;
 
 pub fn main() !void {
@@ -50,7 +50,7 @@ pub fn main() !void {
 
         var json = std.ArrayList(u8).init(std.heap.c_allocator);
         defer json.deinit();
-        try zdns.zone2json.convertMem(envelope.message.body.slice().?, json.writer());
+        try zone2json.convertMem(envelope.message.body.slice().?, json.writer());
 
         var props: amqp.basic_properties_t = undefined;
         props._flags = amqp.basic_properties_t.CORRELATION_ID_FLAG | amqp.basic_properties_t.CONTENT_TYPE_FLAG;

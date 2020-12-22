@@ -1,0 +1,60 @@
+{
+ "name": "minimal.com",
+ "records": [
+  {
+   "name": "minimal.com",
+   "type": "SOA",
+   "ttl": 3600,
+   "data": {
+    "mname": "dns.minimal.com",
+    "rname": "hostmaster.minimal.com",
+    "serial": 1999022301,
+    "refresh": 86400,
+    "retry": 7200,
+    "expire": 3600000,
+    "minimum": 172800
+   }
+  },
+  {
+   "name": "minimal.com",
+   "type": "A",
+   "ttl": 3600,
+   "data": {
+    "ip": "1.2.3.4"
+   }
+  },
+  {
+   "name": "minimal.com",
+   "type": "NS",
+   "ttl": 3600,
+   "data": {
+    "dname": "ns.minimal.net"
+   }
+  },
+  {
+   "name": "minimal.com",
+   "type": "MX",
+   "ttl": 3600,
+   "data": {
+    "preference": 10,
+    "exchange": "minimal.com"
+   }
+  },
+  {
+   "name": "minimal.com",
+   "type": "AAAA",
+   "ttl": 3600,
+   "data": {
+    "ip": "2001:6a8:0:1:210:4bff:fe4b:4c61"
+   }
+  },
+  {
+   "name": "www.minimal.com",
+   "type": "CNAME",
+   "ttl": 120,
+   "data": {
+    "dname": "minimal.com"
+   }
+  }
+ ]
+}

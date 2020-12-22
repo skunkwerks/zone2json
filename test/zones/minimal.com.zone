@@ -1,0 +1,15 @@
+minimal.com.  3600  SOA  dns.minimal.com. hostmaster.minimal.com. (
+                         1999022301   ; serial YYYYMMDDnn
+                         86400        ; refresh (  24 hours)
+                         7200         ; retry   (   2 hours)
+                         3600000      ; expire  (1000 hours)
+                         172800 )     ; minimum (   2 days)
+minimal.com.	3600	IN	A	    1.2.3.4
+minimal.com.	3600	IN	NS	    ns.minimal.net.
+minimal.com.	3600	IN	MX	    10 minimal.com.
+minimal.com.	3600	IN	AAAA	2001:6a8:0:1:210:4bff:fe4b:4c61
+www.minimal.com.	120	IN	CNAME	minimal.com.
+;; Query time: 184 msec
+;; SERVER: 192.135.223.10#53(192.135.223.10)
+;; WHEN: Thu Dec 03 13:20:24 UTC 2020
+;; XFR size: 56 records (messages 1, bytes 2010)
