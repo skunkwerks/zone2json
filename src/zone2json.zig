@@ -38,10 +38,8 @@ pub fn rrFieldNames(type_: ldns.rr_type, ctx: anytype) ![]const []const u8 {
         .TSIG => &[_]str{ "alg", "time", "fudge", "mac", "msgid", "err", "other" },
         .TXT => &[_]str{"txt"},
         else => {
-            const buf = try ldns.buffer.new(16);
-            defer buf.free();
-            try ctx.ok(type_.appendStr(buf));
-            try ctx.err_writer.print("error: unsupported record type: {s}", .{buf.data()});
+            try ctx.ok(type_.appendStr(ctx.tmp_buf));
+            try ctx.err_writer.print("error: unsupported record type: {s}", .{ctx.tmp_buf.data()});
             return error.UnsupportedRecordType;
         },
     };
@@ -237,7 +235,7 @@ pub fn Context(comptime Writer: type, comptime ErrWriter: type) type {
         pub fn ok(self: *@This(), status: ldns.status) !void {
             if (status != .OK) {
                 try self.err_writer.print("internal error: {s}", .{status.get_errorstr()});
-                return error.UnexpectedError;
+                return error.Unexpected;
             }
         }
     };
@@ -276,7 +274,7 @@ pub fn convertApi(zone: []const u8, json_out: *std.ArrayList(u8)) !void {
     try json_writer.beginObject();
     try json_writer.objectField("ok");
     convertMem(zone, &json_writer, err_stream.writer()) catch |err| switch (err) {
-        error.OutOfMemory, error.SystemResources, error.NoSpaceLeft, error.UnexpectedError => return err,
+        error.OutOfMemory, error.SystemResources, error.NoSpaceLeft, error.Unexpected => return err,
         error.ParseError, error.UnsupportedRecordType, error.NoSoaRecord => {
             json_out.shrinkRetainingCapacity(0);
             json_writer = std.json.writeStream(json_out.writer(), 10);
