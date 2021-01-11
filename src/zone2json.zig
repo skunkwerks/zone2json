@@ -39,7 +39,7 @@ pub fn rrFieldNames(type_: ldns.rr_type, ctx: anytype) ![]const []const u8 {
         .TXT => &[_]str{"txt"},
         else => {
             try ctx.ok(type_.appendStr(ctx.tmp_buf));
-            try ctx.err_writer.print("error: unsupported record type: {s}", .{ctx.tmp_buf.data()});
+            try ctx.err_writer.print("unsupported record type: {s}", .{ctx.tmp_buf.data()});
             return error.UnsupportedRecordType;
         },
     };
@@ -201,7 +201,7 @@ pub fn emitZone(zone: *ldns.zone, ctx: anytype) !void {
     const rr_count = rr_list.rr_count();
 
     const soa = zone.soa() orelse {
-        try ctx.err_writer.print("error: no SOA record in zone", .{});
+        try ctx.err_writer.print("no SOA record in zone", .{});
         return error.NoSoaRecord;
     };
 
@@ -234,7 +234,7 @@ pub fn Context(comptime Writer: type, comptime ErrWriter: type) type {
 
         pub fn ok(self: *@This(), status: ldns.status) !void {
             if (status != .OK) {
-                try self.err_writer.print("internal error: {s}", .{status.get_errorstr()});
+                std.log.err("unexpected ldns error: {s}", .{status.get_errorstr()});
                 return error.Unexpected;
             }
         }
@@ -245,7 +245,7 @@ pub fn convertCFile(file: *c.FILE, json_writer: anytype, err_writer: anytype) !v
     const zone = switch (ldns.zone.new_frm_fp(file, null, 0, .IN)) {
         .ok => |z| z,
         .err => |err| {
-            try err_writer.print("error: parsing zone failed on line {}: {s}", .{ err.line, err.code.get_errorstr() });
+            try err_writer.print("parsing zone failed on line {}: {s}", .{ err.line, err.code.get_errorstr() });
             return error.ParseError;
         },
     };
@@ -258,10 +258,8 @@ pub fn convertCFile(file: *c.FILE, json_writer: anytype, err_writer: anytype) !v
     try emitZone(zone, &ctx);
 }
 
-extern "c" fn fmemopen(noalias buf: ?*c_void, size: usize, noalias mode: [*:0]const u8) ?*c.FILE;
-
 pub fn convertMem(zone: []const u8, json_writer: anytype, err_writer: anytype) !void {
-    const file = fmemopen(@intToPtr(?*c_void, @ptrToInt(zone.ptr)), zone.len, "r") orelse return error.SystemResources;
+    const file = c.fmemopen(@intToPtr(?*c_void, @ptrToInt(zone.ptr)), zone.len, "r") orelse return error.SystemResources;
     defer _ = c.fclose(file);
     return convertCFile(file, json_writer, err_writer);
 }

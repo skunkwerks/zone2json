@@ -1,17 +1,45 @@
 const std = @import("std");
-const log = std.log;
 const amqp = @import("zamqp");
 const zone2json = @import("zone2json.zig");
 const bytes = amqp.bytes_t.init;
 
+var logOut: enum { syslog, stderr } = .syslog;
+
+// override the std implementation
+pub fn log(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    const scope_prefix = if (scope == .default) "" else "(" ++ @tagName(scope) ++ "): ";
+
+    switch (logOut) {
+        .syslog => {
+            var buf: [4096]u8 = undefined;
+            const printed = std.fmt.bufPrintZ(&buf, scope_prefix ++ format, args) catch blk: {
+                buf[buf.len - 1] = 0;
+                break :blk buf[0 .. buf.len - 1 :0];
+            };
+
+            std.c.syslog(@enumToInt(level), "%s", printed.ptr);
+        },
+        .stderr => {
+            const level_prefix = "[" ++ @tagName(level) ++ "] ";
+            std.debug.print(level_prefix ++ scope_prefix ++ format ++ "\n", args);
+        },
+    }
+}
+
 fn logOrPanic(err: anyerror) void {
+    std.log.err("{}", .{err});
     switch (err) {
         error.OutOfMemory => {
             // librabbitmq docs say it is not designed to handle OOM
             std.debug.panic("out of memory", .{});
         },
         error.Unexpected => std.debug.panic("unexpected error", .{}),
-        else => std.log.err("error: {}", .{err}),
+        else => {},
     }
 }
 
@@ -90,8 +118,11 @@ fn setupConnection(conn: amqp.Connection) !void {
 
     const sock = try amqp.TcpSocket.new(conn);
     try sock.open(hostname, port, null);
+    errdefer conn.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
     try conn.login("/", .{ .plain = .{ .username = "guest", .password = "guest" } }, .{ .heartbeat = 0 });
+
+    std.log.info("connected to {s}:{d}", .{ hostname, port });
 }
 
 pub fn main() !void {
