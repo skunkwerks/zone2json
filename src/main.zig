@@ -101,39 +101,107 @@ fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel) !void {
     try channel.basic_ack(envelope.delivery_tag, false);
 }
 
-fn setupChannel(channel: amqp.Channel) !void {
-    const queue = bytes("rpc_queue");
+fn setupChannel(channel: amqp.Channel, queue: []const u8) !void {
+    const queue_bytes = bytes(queue);
 
     _ = try channel.open();
     errdefer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
-    _ = try channel.queue_declare(queue, .{ .auto_delete = true });
+    _ = try channel.queue_declare(queue_bytes, .{ .auto_delete = true });
 
-    _ = try channel.basic_consume(queue, .{});
+    _ = try channel.basic_consume(queue_bytes, .{});
 }
 
-fn setupConnection(conn: amqp.Connection) !void {
-    const hostname = "localhost";
-    const port = 5672;
+const ConnectionSettings = struct {
+    port: c_int,
+    host: [*:0]const u8,
+    vhost: [*:0]const u8,
+    auth: amqp.Connection.SaslAuth,
+    ca_cert: [*:0]const u8,
+    heartbeat: c_int,
+};
 
-    const sock = try amqp.TcpSocket.new(conn);
-    try sock.open(hostname, port, null);
+fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
+    const sock = try amqp.SslSocket.new(conn);
+    sock.set_verify_peer(true);
+    sock.set_verify_hostname(true);
+    try sock.set_cacert(settings.ca_cert);
+
+    try sock.open(settings.host, settings.port, null);
     errdefer conn.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
-    try conn.login("/", .{ .plain = .{ .username = "guest", .password = "guest" } }, .{ .heartbeat = 0 });
+    std.log.info("connected to {s}:{d}", .{ settings.host, settings.port });
 
-    std.log.info("connected to {s}:{d}", .{ hostname, port });
+    try conn.login(settings.vhost, settings.auth, .{ .heartbeat = settings.heartbeat });
+
+    std.log.info("logged in to vhost {s}", .{settings.vhost});
+}
+
+fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
+    std.debug.print(fmt ++ "\n", args);
+    std.os.exit(1);
+}
+
+fn arg(args: *std.process.ArgIterator, cur: []const u8, comptime name: []const u8) ?[:0]const u8 {
+    return if (std.mem.eql(u8, cur, name))
+        args.nextPosix() orelse fatal("missing argument after {s}", .{name})
+    else
+        null;
 }
 
 pub fn main() !void {
     const alloc = std.heap.c_allocator;
 
-    // TODO add backoff after repeated failure
+    var args = std.process.args();
 
-    connection: while (true) {
+    var port: c_int = 5671;
+    var host: [*:0]const u8 = "localhost";
+    var vhost: [*:0]const u8 = "/";
+    var user: [*:0]const u8 = "guest";
+    var password: [*:0]const u8 = "guest";
+    var ca_cert: ?[*:0]const u8 = null;
+    var heartbeat: c_int = 0;
+    var queue: []const u8 = "zone2json";
+
+    while (args.nextPosix()) |opt| {
+        if (arg(&args, opt, "--log")) |val| {
+            logOut = std.meta.stringToEnum(@TypeOf(logOut), val) orelse fatal("invalid --log argument", .{});
+        } else if (arg(&args, opt, "--host")) |val| {
+            host = val;
+        } else if (arg(&args, opt, "--port")) |val| {
+            port = std.fmt.parseInt(c_int, val, 10) catch fatal("invalid --port argument", .{});
+        } else if (arg(&args, opt, "--vhost")) |val| {
+            vhost = val;
+        } else if (arg(&args, opt, "--user")) |val| {
+            user = val;
+        } else if (arg(&args, opt, "--password")) |val| {
+            password = val;
+        } else if (arg(&args, opt, "--ca-root")) |val| {
+            ca_cert = val;
+        } else if (arg(&args, opt, "--heartbeat")) |val| {
+            heartbeat = std.fmt.parseInt(c_int, val, 10) catch fatal("invalid --heartbeat argument", .{});
+        } else if (arg(&args, opt, "--queue")) |val| {
+            queue = val;
+        } else if (std.mem.eql(u8, opt, "-h") or std.mem.eql(u8, opt, "--help")) {
+            try help();
+            std.os.exit(0);
+        }
+    }
+
+    if (ca_cert == null) fatal("please specify a trusted root certificates file with --ca-root", .{});
+
         var conn = try amqp.Connection.new();
         defer conn.destroy() catch |err| logOrPanic(err);
-        setupConnection(conn) catch |err| {
+
+    connection: while (true) {
+        setupConnection(conn, .{
+            .port = port,
+            .host = host,
+            .vhost = vhost,
+            .auth = .{ .plain = .{ .username = user, .password = password } },
+            .ca_cert = ca_cert.?,
+            .heartbeat = heartbeat,
+        }) catch |err| {
             logOrPanic(err);
             continue :connection;
         };
@@ -141,7 +209,7 @@ pub fn main() !void {
 
         channel: while (true) {
             const channel = conn.channel(1);
-            setupChannel(channel) catch |err| {
+            setupChannel(channel, queue) catch |err| {
                 logOrPanic(err);
                 if (err == error.ChannelClosed) continue :channel;
                 continue :connection;
@@ -157,4 +225,23 @@ pub fn main() !void {
             }
         }
     }
+}
+
+fn help() !void {
+    try std.io.getStdOut().writeAll(
+        \\Usage: zone2json-server OPTIONS
+        \\An AMQP RPC server that converts DNS zones to JSON
+        \\Options:
+        \\  --host        default: localhost
+        \\  --port        default: 5671
+        \\  --vhost       default: /
+        \\  --user        default: guest
+        \\  --password    default: guest
+        \\  --queue       default: zone2json
+        \\  --log         log to syslog (default) or stderr
+        \\  --ca-root     trusted root certificates file
+        \\  --heartbeat   seconds, 0 to disable (default)
+        \\  --help        display help and exit
+        \\
+    );
 }
