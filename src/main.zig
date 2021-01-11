@@ -137,6 +137,22 @@ fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
     std.log.info("logged in to vhost {s}", .{settings.vhost});
 }
 
+fn exponentialBackoff(backoff: *i64, random: *std.rand.Random) void {
+    if (backoff.* == 0) {
+        // first time try again without waiting
+        backoff.* = 1000;
+        return;
+    }
+
+    const start = std.time.milliTimestamp();
+    var to_sleep: i64 = backoff.* + random.uintLessThanBiased(u32, 1000);
+    while (to_sleep > 1) {
+        std.time.sleep(@intCast(u64, to_sleep * std.time.ns_per_ms));
+        to_sleep -= std.time.milliTimestamp() - start;
+    }
+    if (backoff.* < 32_000) backoff.* *= 2;
+}
+
 fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
     std.debug.print(fmt ++ "\n", args);
     std.os.exit(1);
@@ -190,8 +206,11 @@ pub fn main() !void {
 
     if (ca_cert == null) fatal("please specify a trusted root certificates file with --ca-root", .{});
 
-        var conn = try amqp.Connection.new();
-        defer conn.destroy() catch |err| logOrPanic(err);
+    var conn = try amqp.Connection.new();
+    defer conn.destroy() catch |err| logOrPanic(err);
+
+    var backoff_ms: i64 = 0;
+    var rng = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
 
     connection: while (true) {
         setupConnection(conn, .{
@@ -203,6 +222,7 @@ pub fn main() !void {
             .heartbeat = heartbeat,
         }) catch |err| {
             logOrPanic(err);
+            exponentialBackoff(&backoff_ms, &rng.random);
             continue :connection;
         };
         defer conn.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
@@ -211,7 +231,7 @@ pub fn main() !void {
             const channel = conn.channel(1);
             setupChannel(channel, queue) catch |err| {
                 logOrPanic(err);
-                if (err == error.ChannelClosed) continue :channel;
+                exponentialBackoff(&backoff_ms, &rng.random);
                 continue :connection;
             };
             defer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
@@ -219,9 +239,11 @@ pub fn main() !void {
             while (true) {
                 listen(alloc, channel) catch |err| {
                     logOrPanic(err);
+                    exponentialBackoff(&backoff_ms, &rng.random);
                     if (err == error.ChannelClosed) continue :channel;
                     continue :connection;
                 };
+                backoff_ms = 0;
             }
         }
     }
