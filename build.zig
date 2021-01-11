@@ -1,6 +1,13 @@
 const std = @import("std");
 const bld = std.build;
 
+var ldns_path: ?[]const u8 = undefined;
+var rabbitmq_path: ?[]const u8 = undefined;
+var ssl_path: ?[]const u8 = undefined;
+var crypto_path: ?[]const u8 = undefined;
+var zamqp_path: []const u8 = undefined;
+var zdns_path: []const u8 = undefined;
+
 pub fn build(b: *bld.Builder) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
@@ -11,6 +18,14 @@ pub fn build(b: *bld.Builder) !void {
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
+
+    ldns_path = b.option([]const u8, "static-ldns", "path to libldns.a");
+    rabbitmq_path = b.option([]const u8, "static-rabbitmq", "path to librabbitmq.a");
+    ssl_path = b.option([]const u8, "static-ssl", "path to libssl.a");
+    crypto_path = b.option([]const u8, "static-crypto", "path to libcrypto.a");
+
+    zamqp_path = b.option([]const u8, "zamqp", "path to zamqp.zig") orelse "../zamqp/src/zamqp.zig";
+    zdns_path = b.option([]const u8, "zdns", "path to zdns.zig") orelse "../zdns/src/zdns.zig";
 
     const server_exe = b.addExecutable("zone2json-server", "src/main.zig");
     const server_run_cmd = setupExe(b, server_exe, target, mode);
@@ -35,11 +50,35 @@ pub fn build(b: *bld.Builder) !void {
 
 fn addDependencies(step: *bld.LibExeObjStep) void {
     step.linkLibC();
-    step.linkSystemLibrary("rabbitmq");
-    step.linkSystemLibrary("ldns");
 
-    step.addPackagePath("zamqp", "../zamqp/src/zamqp.zig");
-    step.addPackagePath("zdns", "../zdns/src/zdns.zig");
+    if (ldns_path) |path| {
+        step.addObjectFile(path);
+    } else {
+        step.linkSystemLibrary("ldns");
+    }
+
+    if (rabbitmq_path) |path| {
+        step.addObjectFile(path);
+    } else {
+        step.linkSystemLibrary("rabbitmq");
+    }
+
+    if (ldns_path != null or rabbitmq_path != null) {
+        if (ssl_path) |path| {
+            step.addObjectFile(path);
+        } else {
+            step.linkSystemLibrary("ssl");
+        }
+
+        if (crypto_path) |path| {
+            step.addObjectFile(path);
+        } else {
+            step.linkSystemLibrary("crypto");
+        }
+    }
+
+    step.addPackagePath("zamqp", zamqp_path);
+    step.addPackagePath("zdns", zdns_path);
 }
 
 fn setupExe(b: *bld.Builder, exe: *bld.LibExeObjStep, target: std.zig.CrossTarget, mode: std.builtin.Mode) *bld.RunStep {
