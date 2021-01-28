@@ -101,14 +101,14 @@ fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel) !void {
     try channel.basic_ack(envelope.delivery_tag, false);
 }
 
-fn setupChannel(channel: amqp.Channel, queue: []const u8) !void {
+fn setupChannel(channel: amqp.Channel, queue: []const u8, prefetch_count: u16) !void {
     const queue_bytes = bytes(queue);
 
     _ = try channel.open();
     errdefer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
     _ = try channel.queue_declare(queue_bytes, .{ .auto_delete = true });
-
+    _ = try channel.basic_qos(0, prefetch_count, false);
     _ = try channel.basic_consume(queue_bytes, .{});
 }
 
@@ -178,6 +178,7 @@ pub fn main() !void {
     var ca_cert: ?[*:0]const u8 = null;
     var heartbeat: c_int = 0;
     var queue: []const u8 = "zone2json";
+    var prefetch_count: u16 = 0;
 
     while (args.nextPosix()) |opt| {
         if (arg(&args, opt, "--log")) |val| {
@@ -198,6 +199,8 @@ pub fn main() !void {
             heartbeat = std.fmt.parseInt(c_int, val, 10) catch fatal("invalid --heartbeat argument", .{});
         } else if (arg(&args, opt, "--queue")) |val| {
             queue = val;
+        } else if (arg(&args, opt, "--prefetch-count")) |val| {
+            prefetch_count = std.fmt.parseInt(u16, val, 10) catch fatal("invalid --prefetch-count argument", .{});
         } else if (std.mem.eql(u8, opt, "-h") or std.mem.eql(u8, opt, "--help")) {
             try help();
             std.os.exit(0);
@@ -229,7 +232,7 @@ pub fn main() !void {
 
         channel: while (true) {
             const channel = conn.channel(1);
-            setupChannel(channel, queue) catch |err| {
+            setupChannel(channel, queue, prefetch_count) catch |err| {
                 logOrPanic(err);
                 exponentialBackoff(&backoff_ms, &rng.random);
                 continue :connection;
@@ -254,16 +257,17 @@ fn help() !void {
         \\Usage: zone2json-server OPTIONS
         \\An AMQP RPC server that converts DNS zones to JSON
         \\Options:
-        \\  --host        default: localhost
-        \\  --port        default: 5671
-        \\  --vhost       default: /
-        \\  --user        default: guest
-        \\  --password    default: guest
-        \\  --queue       default: zone2json
-        \\  --log         log to syslog (default) or stderr
-        \\  --ca-root     trusted root certificates file
-        \\  --heartbeat   seconds, 0 to disable (default)
-        \\  --help        display help and exit
+        \\  --host            default: localhost
+        \\  --port            default: 5671
+        \\  --vhost           default: /
+        \\  --user            default: guest
+        \\  --password        default: guest
+        \\  --queue           default: zone2json
+        \\  --prefetch-count  default: 0 (unlimited)
+        \\  --log             log to syslog (default) or stderr
+        \\  --ca-root         trusted root certificates file
+        \\  --heartbeat       seconds, 0 to disable (default)
+        \\  --help            display help and exit
         \\
     );
 }
