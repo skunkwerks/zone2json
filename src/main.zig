@@ -117,17 +117,23 @@ const ConnectionSettings = struct {
     host: [*:0]const u8,
     vhost: [*:0]const u8,
     auth: amqp.Connection.SaslAuth,
-    ca_cert: [*:0]const u8,
+    /// null disables TLS
+    ca_cert: ?[*:0]const u8,
     heartbeat: c_int,
 };
 
 fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
-    const sock = try amqp.SslSocket.new(conn);
-    sock.set_verify_peer(true);
-    sock.set_verify_hostname(true);
-    try sock.set_cacert(settings.ca_cert);
+    if (settings.ca_cert) |ca_cert| {
+        const sock = try amqp.SslSocket.new(conn);
+        sock.set_verify_peer(true);
+        sock.set_verify_hostname(true);
+        try sock.set_cacert(ca_cert);
+        try sock.open(settings.host, settings.port, null);
+    } else {
+        const sock = try amqp.TcpSocket.new(conn);
+        try sock.open(settings.host, settings.port, null);
+    }
 
-    try sock.open(settings.host, settings.port, null);
     errdefer conn.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
     std.log.info("connected to {s}:{d}", .{ settings.host, settings.port });
@@ -170,11 +176,12 @@ pub fn main() !void {
 
     var args = std.process.args();
 
-    var port: c_int = 5671;
+    var port: ?c_int = null;
     var host: [*:0]const u8 = "localhost";
     var vhost: [*:0]const u8 = "/";
     var user: [*:0]const u8 = "guest";
     var password: [*:0]const u8 = "guest";
+    var tls = true;
     var ca_cert: ?[*:0]const u8 = null;
     var heartbeat: c_int = 0;
     var queue: []const u8 = "zone2json";
@@ -201,13 +208,18 @@ pub fn main() !void {
             queue = val;
         } else if (arg(&args, opt, "--prefetch-count")) |val| {
             prefetch_count = std.fmt.parseInt(u16, val, 10) catch fatal("invalid --prefetch-count argument", .{});
+        } else if (std.mem.eql(u8, opt, "--no-tls")) {
+            tls = false;
         } else if (std.mem.eql(u8, opt, "-h") or std.mem.eql(u8, opt, "--help")) {
             try help();
             std.os.exit(0);
         }
     }
 
-    if (ca_cert == null) fatal("please specify a trusted root certificates file with --ca-root", .{});
+    if (tls and ca_cert == null) fatal("specify a trusted root certificates file with --ca-root or disable TLS with --no-tls", .{});
+    if (!tls and ca_cert != null) fatal("contradictory options: --ca-root and --no-tls", .{});
+
+    if (port == null) port = if (tls) 5671 else 5672;
 
     var conn = try amqp.Connection.new();
     defer conn.destroy() catch |err| logOrPanic(err);
@@ -217,11 +229,11 @@ pub fn main() !void {
 
     connection: while (true) {
         setupConnection(conn, .{
-            .port = port,
+            .port = port.?,
             .host = host,
             .vhost = vhost,
             .auth = .{ .plain = .{ .username = user, .password = password } },
-            .ca_cert = ca_cert.?,
+            .ca_cert = ca_cert,
             .heartbeat = heartbeat,
         }) catch |err| {
             logOrPanic(err);
@@ -256,18 +268,20 @@ fn help() !void {
     try std.io.getStdOut().writeAll(
         \\Usage: zone2json-server OPTIONS
         \\An AMQP RPC server that converts DNS zones to JSON
-        \\Options:
-        \\  --host            default: localhost
-        \\  --port            default: 5671
-        \\  --vhost           default: /
-        \\  --user            default: guest
-        \\  --password        default: guest
-        \\  --queue           default: zone2json
-        \\  --prefetch-count  default: 0 (unlimited)
-        \\  --log             log to syslog (default) or stderr
-        \\  --ca-root         trusted root certificates file
-        \\  --heartbeat       seconds, 0 to disable (default)
-        \\  --help            display help and exit
+        \\Connection options:
+        \\  --host [name]             default: localhost
+        \\  --port [port]             default: 5671 (with TLS) / 5672 (without TLS)
+        \\  --vhost [name]            default: /
+        \\  --user [name]             default: guest
+        \\  --password [password]     default: guest
+        \\  --queue [name]            default: zone2json
+        \\  --prefetch-count [count]  default: 0 (unlimited)
+        \\  --heartbeat [seconds]     default: 0 (disabled)
+        \\  --ca-root [path]          trusted root certificates file
+        \\  --no-tls                  disable TLS
+        \\Other options:
+        \\  --log [syslog|stderr]     log target (default: syslog)
+        \\  --help                    display help and exit
         \\
     );
 }
