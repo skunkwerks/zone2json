@@ -43,10 +43,20 @@ fn logOrPanic(err: anyerror) void {
     }
 }
 
-fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel) !void {
+const ChannelState = struct {
+    unacked_count: u16 = 0,
+    last_delivery_tag: u64 = 0,
+};
+
+fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel, state: *ChannelState, settings: ChannelSettings) !void {
     channel.maybe_release_buffers();
 
-    var envelope = channel.connection.consume_message(null, 0) catch |err| switch (err) {
+    var zero_timeval = std.c.timeval{ .tv_sec = 0, .tv_usec = 0 };
+
+    const block = state.unacked_count == 0;
+    var timeout = if (block) null else &zero_timeval;
+
+    var envelope = channel.connection.consume_message(timeout, 0) catch |err| switch (err) {
         // a different frame needs to be read
         error.UnexpectedState => {
             const frame = try channel.connection.simple_wait_frame(null);
@@ -58,6 +68,12 @@ fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel) !void {
                 }
             } else return error.UnexpectedFrame;
         },
+        error.Timeout => {
+            try channel.basic_ack(state.last_delivery_tag, true);
+            state.unacked_count = 0;
+            std.log.debug("no messages, acked partial batch (delivery tag: {d})", .{state.last_delivery_tag});
+            return;
+        },
         else => return err,
     };
     defer envelope.destroy();
@@ -66,6 +82,9 @@ fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel) !void {
         try channel.basic_reject(envelope.delivery_tag, false);
         return;
     };
+
+    state.unacked_count += 1;
+    state.last_delivery_tag = envelope.delivery_tag;
 
     var json = try std.ArrayList(u8).initCapacity(alloc, 4096);
     defer json.deinit();
@@ -98,18 +117,32 @@ fn listen(alloc: *std.mem.Allocator, channel: amqp.Channel) !void {
         .{},
     );
 
-    try channel.basic_ack(envelope.delivery_tag, false);
+    if (state.unacked_count == settings.max_batch) {
+        try channel.basic_ack(state.last_delivery_tag, true);
+        state.unacked_count = 0;
+        std.log.debug("acked full batch (delivery tag: {d})", .{state.last_delivery_tag});
+    }
 }
 
-fn setupChannel(channel: amqp.Channel, queue: []const u8, prefetch_count: u16) !void {
-    const queue_bytes = bytes(queue);
+const ChannelSettings = struct {
+    queue: []const u8,
+    prefetch_count: u16,
+    max_batch: u16,
+};
+
+fn setupChannel(channel: amqp.Channel, settings: ChannelSettings) !void {
+    const queue_bytes = bytes(settings.queue);
 
     _ = try channel.open();
     errdefer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
-    _ = try channel.queue_declare(queue_bytes, .{ .auto_delete = true });
-    _ = try channel.basic_qos(0, prefetch_count, false);
+    std.log.info("opened channel {d}", .{channel.number});
+
+    _ = try channel.queue_declare(queue_bytes, .{});
+    _ = try channel.basic_qos(0, settings.prefetch_count, false);
     _ = try channel.basic_consume(queue_bytes, .{});
+
+    std.log.info("consuming from queue {s}", .{settings.queue});
 }
 
 const ConnectionSettings = struct {
@@ -140,7 +173,7 @@ fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
 
     try conn.login(settings.vhost, settings.auth, .{ .heartbeat = settings.heartbeat });
 
-    std.log.info("logged in to vhost {s}", .{settings.vhost});
+    std.log.info("logged in to vhost {s} as {s}", .{ settings.vhost, settings.auth.plain.username });
 }
 
 fn exponentialBackoff(backoff: *i64, random: *std.rand.Random) void {
@@ -164,11 +197,19 @@ fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
     std.os.exit(1);
 }
 
-fn arg(args: *std.process.ArgIterator, cur: []const u8, comptime name: []const u8) ?[:0]const u8 {
-    return if (std.mem.eql(u8, cur, name))
-        args.nextPosix() orelse fatal("missing argument after {s}", .{name})
-    else
-        null;
+fn arg(args: *std.process.ArgIterator, cur: []const u8, comptime name: []const u8, T: type) ?T {
+    if (!std.mem.eql(u8, cur, name)) return null;
+
+    const val = args.nextPosix() orelse fatal("missing argument after {s}", .{name});
+
+    if (T == [:0]const u8) {
+        return val;
+    }
+    if (@typeInfo(T) == .Int) {
+        return std.fmt.parseInt(T, val, 10) catch |err| fatal("invalid {s} argument: {}", .{ name, err });
+    }
+
+    @compileError("unimplemented type");
 }
 
 pub fn main() !void {
@@ -186,28 +227,34 @@ pub fn main() !void {
     var heartbeat: c_int = 0;
     var queue: []const u8 = "zone2json";
     var prefetch_count: u16 = 0;
+    var max_batch: u16 = 1;
+
+    const str = [:0]const u8;
 
     while (args.nextPosix()) |opt| {
-        if (arg(&args, opt, "--log")) |val| {
+        if (arg(&args, opt, "--log", str)) |val| {
             logOut = std.meta.stringToEnum(@TypeOf(logOut), val) orelse fatal("invalid --log argument", .{});
-        } else if (arg(&args, opt, "--host")) |val| {
+        } else if (arg(&args, opt, "--host", str)) |val| {
             host = val;
-        } else if (arg(&args, opt, "--port")) |val| {
-            port = std.fmt.parseInt(c_int, val, 10) catch fatal("invalid --port argument", .{});
-        } else if (arg(&args, opt, "--vhost")) |val| {
+        } else if (arg(&args, opt, "--port", c_int)) |val| {
+            port = val;
+        } else if (arg(&args, opt, "--vhost", str)) |val| {
             vhost = val;
-        } else if (arg(&args, opt, "--user")) |val| {
+        } else if (arg(&args, opt, "--user", str)) |val| {
             user = val;
-        } else if (arg(&args, opt, "--password")) |val| {
+        } else if (arg(&args, opt, "--password", str)) |val| {
             password = val;
-        } else if (arg(&args, opt, "--ca-root")) |val| {
+        } else if (arg(&args, opt, "--ca-root", str)) |val| {
             ca_cert = val;
-        } else if (arg(&args, opt, "--heartbeat")) |val| {
-            heartbeat = std.fmt.parseInt(c_int, val, 10) catch fatal("invalid --heartbeat argument", .{});
-        } else if (arg(&args, opt, "--queue")) |val| {
+        } else if (arg(&args, opt, "--heartbeat", c_int)) |val| {
+            heartbeat = val;
+        } else if (arg(&args, opt, "--queue", str)) |val| {
             queue = val;
-        } else if (arg(&args, opt, "--prefetch-count")) |val| {
-            prefetch_count = std.fmt.parseInt(u16, val, 10) catch fatal("invalid --prefetch-count argument", .{});
+        } else if (arg(&args, opt, "--prefetch-count", u16)) |val| {
+            prefetch_count = val;
+        } else if (arg(&args, opt, "--batch", u16)) |val| {
+            if (val == 0) fatal("invalid --batch argument: 0 is not allowed", .{});
+            max_batch = val;
         } else if (std.mem.eql(u8, opt, "--no-tls")) {
             tls = false;
         } else if (std.mem.eql(u8, opt, "-h") or std.mem.eql(u8, opt, "--help")) {
@@ -227,6 +274,12 @@ pub fn main() !void {
     var backoff_ms: i64 = 0;
     var rng = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
 
+    const chanSettings = ChannelSettings{
+        .queue = queue,
+        .prefetch_count = prefetch_count,
+        .max_batch = max_batch,
+    };
+
     connection: while (true) {
         setupConnection(conn, .{
             .port = port.?,
@@ -244,15 +297,17 @@ pub fn main() !void {
 
         channel: while (true) {
             const channel = conn.channel(1);
-            setupChannel(channel, queue, prefetch_count) catch |err| {
+            setupChannel(channel, chanSettings) catch |err| {
                 logOrPanic(err);
                 exponentialBackoff(&backoff_ms, &rng.random);
                 continue :connection;
             };
             defer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
+            var state = ChannelState{};
+
             while (true) {
-                listen(alloc, channel) catch |err| {
+                listen(alloc, channel, &state, chanSettings) catch |err| {
                     logOrPanic(err);
                     exponentialBackoff(&backoff_ms, &rng.random);
                     if (err == error.ChannelClosed) continue :channel;
@@ -274,11 +329,14 @@ fn help() !void {
         \\  --vhost [name]            default: /
         \\  --user [name]             default: guest
         \\  --password [password]     default: guest
-        \\  --queue [name]            default: zone2json
-        \\  --prefetch-count [count]  default: 0 (unlimited)
         \\  --heartbeat [seconds]     default: 0 (disabled)
         \\  --ca-root [path]          trusted root certificates file
         \\  --no-tls                  disable TLS
+        \\Channel options:
+        \\  --queue [name]            default: zone2json
+        \\  --prefetch-count [count]  default: 0 (unlimited)
+        \\  --batch [count]           Acknowledge in batches of size count (default: 1)
+        \\                            (sooner if there are no messages to process)
         \\Other options:
         \\  --log [syslog|stderr]     log target (default: syslog)
         \\  --help                    display help and exit
