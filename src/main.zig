@@ -131,18 +131,17 @@ const ChannelSettings = struct {
 };
 
 fn setupChannel(channel: amqp.Channel, settings: ChannelSettings) !void {
-    const queue_bytes = bytes(settings.queue);
+    std.log.info("opening channel {d}", .{channel.number});
 
     _ = try channel.open();
     errdefer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
-    std.log.info("opened channel {d}", .{channel.number});
-
-    _ = try channel.queue_declare(queue_bytes, .{});
-    _ = try channel.basic_qos(0, settings.prefetch_count, false);
-    _ = try channel.basic_consume(queue_bytes, .{});
-
     std.log.info("consuming from queue {s}", .{settings.queue});
+
+    try channel.basic_qos(0, settings.prefetch_count, false);
+    _ = try channel.basic_consume(bytes(settings.queue), .{});
+
+    std.log.info("channel set up", .{});
 }
 
 const ConnectionSettings = struct {
@@ -156,6 +155,8 @@ const ConnectionSettings = struct {
 };
 
 fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
+    std.log.info("connecting to {s}:{d}", .{ settings.host, settings.port });
+
     if (settings.ca_cert) |ca_cert| {
         const sock = try amqp.SslSocket.new(conn);
         sock.set_verify_peer(true);
@@ -169,11 +170,11 @@ fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
 
     errdefer conn.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
 
-    std.log.info("connected to {s}:{d}", .{ settings.host, settings.port });
+    std.log.info("logging into vhost {s} as {s}", .{ settings.vhost, settings.auth.plain.username });
 
     try conn.login(settings.vhost, settings.auth, .{ .heartbeat = settings.heartbeat });
 
-    std.log.info("logged in to vhost {s} as {s}", .{ settings.vhost, settings.auth.plain.username });
+    std.log.info("connection set up", .{});
 }
 
 fn exponentialBackoff(backoff: *i64, random: *std.rand.Random) void {
@@ -216,6 +217,7 @@ pub fn main() !void {
     const alloc = std.heap.c_allocator;
 
     var args = std.process.args();
+    var uri: ?[:0]u8 = null;
 
     var port: ?c_int = null;
     var host: [*:0]const u8 = "localhost";
@@ -225,14 +227,34 @@ pub fn main() !void {
     var tls = true;
     var ca_cert: ?[*:0]const u8 = null;
     var heartbeat: c_int = 0;
-    var queue: []const u8 = "zone2json";
-    var prefetch_count: u16 = 0;
-    var max_batch: u16 = 1;
+
+    var chanSettings = ChannelSettings{
+        .queue = "zone2json",
+        .prefetch_count = 0,
+        .max_batch = 1,
+    };
 
     const str = [:0]const u8;
 
+    _ = args.nextPosix(); // skip exe path
+
     while (args.nextPosix()) |opt| {
-        if (arg(&args, opt, "--log", str)) |val| {
+        if (opt[0] != '-') {
+            if(uri != null) fatal("multiple URIs specified", .{});
+
+            uri = try alloc.dupeZ(u8, opt);
+            if(std.mem.indexOfScalar(u8, uri.?, '?')) |index| {
+                uri.?[index] = 0;
+                //TODO parse query
+            }
+            const uri_params = amqp.parse_url(uri.?) catch fatal("invalid URI", .{});
+            host = uri_params.host;
+            port = uri_params.port;
+            vhost = uri_params.vhost;
+            user = uri_params.user;
+            password = uri_params.password;
+            tls = uri_params.ssl != 0;
+        } else if (arg(&args, opt, "--log", str)) |val| {
             logOut = std.meta.stringToEnum(@TypeOf(logOut), val) orelse fatal("invalid --log argument", .{});
         } else if (arg(&args, opt, "--host", str)) |val| {
             host = val;
@@ -249,22 +271,24 @@ pub fn main() !void {
         } else if (arg(&args, opt, "--heartbeat", c_int)) |val| {
             heartbeat = val;
         } else if (arg(&args, opt, "--queue", str)) |val| {
-            queue = val;
+            chanSettings.queue = val;
         } else if (arg(&args, opt, "--prefetch-count", u16)) |val| {
-            prefetch_count = val;
+            chanSettings.prefetch_count = val;
         } else if (arg(&args, opt, "--batch", u16)) |val| {
             if (val == 0) fatal("invalid --batch argument: 0 is not allowed", .{});
-            max_batch = val;
+            chanSettings.max_batch = val;
         } else if (std.mem.eql(u8, opt, "--no-tls")) {
             tls = false;
         } else if (std.mem.eql(u8, opt, "-h") or std.mem.eql(u8, opt, "--help")) {
             try help();
             std.os.exit(0);
+        } else {
+            fatal("unknown option: {s}", .{opt});
         }
     }
 
-    if (tls and ca_cert == null) fatal("specify a trusted root certificates file with --ca-root or disable TLS with --no-tls", .{});
-    if (!tls and ca_cert != null) fatal("contradictory options: --ca-root and --no-tls", .{});
+    if (tls and ca_cert == null) fatal("specify a trusted root certificates file with --ca-root or disable TLS with --no-tls or an amqp:// URI", .{});
+    if (!tls and ca_cert != null) fatal("contradictory options: --ca-root specified, but TLS disabled", .{});
 
     if (port == null) port = if (tls) 5671 else 5672;
 
@@ -273,12 +297,6 @@ pub fn main() !void {
 
     var backoff_ms: i64 = 0;
     var rng = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
-
-    const chanSettings = ChannelSettings{
-        .queue = queue,
-        .prefetch_count = prefetch_count,
-        .max_batch = max_batch,
-    };
 
     connection: while (true) {
         setupConnection(conn, .{
@@ -321,7 +339,7 @@ pub fn main() !void {
 
 fn help() !void {
     try std.io.getStdOut().writeAll(
-        \\Usage: zone2json-server OPTIONS
+        \\Usage: zone2json-server OPTIONS [URI]
         \\An AMQP RPC server that converts DNS zones to JSON
         \\Connection options:
         \\  --host [name]             default: localhost
