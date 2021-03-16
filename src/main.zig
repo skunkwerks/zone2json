@@ -1,5 +1,6 @@
 const std = @import("std");
 const mem = std.mem;
+const testing = std.testing;
 const amqp = @import("zamqp");
 const server = @import("server.zig");
 
@@ -57,6 +58,7 @@ const UriQueryIterator = struct {
             .value = null,
         };
 
+        if (self.query[self.pos] == '=' or self.query[self.pos] == '&') return error.BadUri;
         self.query[write_pos] = try self.eatChar();
         write_pos += 1;
 
@@ -109,6 +111,66 @@ const UriQueryIterator = struct {
         return self.query[start..end :0];
     }
 };
+
+test "UriQueryIterator" {
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd&qwe=zxc&%3D=%26&a=") };
+        defer std.testing.allocator.free(it.query);
+
+        {
+            const p = (try it.next()).?;
+            testing.expectEqualStrings("asd", p.name);
+            testing.expectEqual(@as(?[:0]const u8, null), p.value);
+        }
+        {
+            const p = (try it.next()).?;
+            testing.expectEqualStrings("qwe", p.name);
+            testing.expectEqualStrings("zxc", p.value.?);
+        }
+        {
+            const p = (try it.next()).?;
+            testing.expectEqualStrings("=", p.name);
+            testing.expectEqualStrings("&", p.value.?);
+        }
+        {
+            const p = (try it.next()).?;
+            testing.expectEqualStrings("a", p.name);
+            testing.expectEqualStrings("", p.value.?);
+        }
+
+        testing.expectEqual(@as(?UriQueryIterator.Param, null), try it.next());
+    }
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd\x00asd") };
+        defer std.testing.allocator.free(it.query);
+        testing.expectError(error.BadUri, it.next());
+    }
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd%00asd") };
+        defer std.testing.allocator.free(it.query);
+        testing.expectError(error.BadUri, it.next());
+    }
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd%n0asd") };
+        defer std.testing.allocator.free(it.query);
+        testing.expectError(error.BadUri, it.next());
+    }
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd%0") };
+        defer std.testing.allocator.free(it.query);
+        testing.expectError(error.BadUri, it.next());
+    }
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "=asd") };
+        defer std.testing.allocator.free(it.query);
+        testing.expectError(error.BadUri, it.next());
+    }
+    {
+        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "&asd") };
+        defer std.testing.allocator.free(it.query);
+        testing.expectError(error.BadUri, it.next());
+    }
+}
 
 const ArgIterator = struct {
     uriIterator: ?UriQueryIterator = null,
