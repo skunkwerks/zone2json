@@ -114,8 +114,8 @@ const UriQueryIterator = struct {
 
 test "UriQueryIterator" {
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd&qwe=zxc&%3D=%26&a=") };
-        defer std.testing.allocator.free(it.query);
+        var query = "asd&qwe=zxc&%3D=%26&a=".*;
+        var it = UriQueryIterator{ .query = &query };
 
         {
             const p = (try it.next()).?;
@@ -141,33 +141,33 @@ test "UriQueryIterator" {
         testing.expectEqual(@as(?UriQueryIterator.Param, null), try it.next());
     }
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd\x00asd") };
-        defer std.testing.allocator.free(it.query);
+        var query = "asd\x00asd".*;
+        var it = UriQueryIterator{ .query = query };
         testing.expectError(error.BadUri, it.next());
     }
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd%00asd") };
-        defer std.testing.allocator.free(it.query);
+        var query = "asd%00asd".*;
+        var it = UriQueryIterator{ .query = query };
         testing.expectError(error.BadUri, it.next());
     }
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd%n0asd") };
-        defer std.testing.allocator.free(it.query);
+        var query = "asd%n0asd".*;
+        var it = UriQueryIterator{ .query = query };
         testing.expectError(error.BadUri, it.next());
     }
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "asd%0") };
-        defer std.testing.allocator.free(it.query);
+        var query = "asd%0".*;
+        var it = UriQueryIterator{ .query = query };
         testing.expectError(error.BadUri, it.next());
     }
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "=asd") };
-        defer std.testing.allocator.free(it.query);
+        var query = "=asd".*;
+        var it = UriQueryIterator{ .query = query };
         testing.expectError(error.BadUri, it.next());
     }
     {
-        var it = UriQueryIterator{ .query = try std.testing.allocator.dupeZ(u8, "&asd") };
-        defer std.testing.allocator.free(it.query);
+        var query = "&asd".*;
+        var it = UriQueryIterator{ .query = query };
         testing.expectError(error.BadUri, it.next());
     }
 }
