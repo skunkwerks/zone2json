@@ -122,18 +122,24 @@ pub const ConnectionSettings = struct {
     vhost: [*:0]const u8,
     auth: amqp.Connection.SaslAuth,
     /// null disables TLS
-    ca_cert: ?[*:0]const u8,
+    ca_cert_path: ?[*:0]const u8,
+    cert_path: ?[*:0]const u8,
+    key_path: ?[*:0]const u8,
     heartbeat: c_int,
 };
 
 fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
     std.log.info("connecting to {s}:{d}", .{ settings.host, settings.port });
 
-    if (settings.ca_cert) |ca_cert| {
+    if (settings.ca_cert_path) |ca_cert_path| {
         const sock = try amqp.SslSocket.new(conn);
         sock.set_verify_peer(true);
         sock.set_verify_hostname(true);
-        try sock.set_cacert(ca_cert);
+        try sock.set_cacert(ca_cert_path);
+
+        if (settings.cert_path != null and settings.key_path != null)
+            try sock.set_key(settings.cert_path.?, settings.key_path.?);
+
         try sock.open(settings.host, settings.port, null);
     } else {
         const sock = try amqp.TcpSocket.new(conn);

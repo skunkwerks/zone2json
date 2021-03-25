@@ -33,7 +33,7 @@ pub fn log(
 }
 
 fn fatal(comptime fmt: []const u8, args: anytype) noreturn {
-    std.debug.print(fmt ++ "\n", args);
+    std.debug.print("ERROR: " ++ fmt ++ "\n", args);
     std.os.exit(1);
 }
 
@@ -250,7 +250,9 @@ pub fn main() !void {
     var user: [*:0]const u8 = "guest";
     var password: [*:0]const u8 = "guest";
     var tls = true;
-    var ca_cert: ?[*:0]const u8 = null;
+    var ca_cert_file: ?[*:0]const u8 = null;
+    var cert_file: ?[*:0]const u8 = null;
+    var key_file: ?[*:0]const u8 = null;
     var heartbeat: c_int = 60;
 
     var chan_settings = server.ChannelSettings{
@@ -292,7 +294,11 @@ pub fn main() !void {
         } else if (args.get("password", str)) |val| {
             password = val;
         } else if (args.get("cacertfile", str)) |val| {
-            ca_cert = val;
+            ca_cert_file = val;
+        } else if (args.get("certfile", str)) |val| {
+            cert_file = val;
+        } else if (args.get("keyfile", str)) |val| {
+            key_file = val;
         } else if (args.get("heartbeat", c_int)) |val| {
             heartbeat = val;
         } else if (args.get("queue", str)) |val| {
@@ -311,8 +317,11 @@ pub fn main() !void {
         }
     }
 
-    if (tls and ca_cert == null) fatal("specify a trusted root certificates file or disable TLS", .{});
-    if (!tls and ca_cert != null) fatal("contradictory options: cacertfile specified, but TLS disabled", .{});
+    if (tls and ca_cert_file == null) fatal("specify a trusted root certificates file or disable TLS", .{});
+    if (!tls and ca_cert_file != null) fatal("cacertfile specified, but TLS disabled", .{});
+    if (!tls and cert_file != null) fatal("certfile specified, but TLS disabled", .{});
+    if (!tls and key_file != null) fatal("keyfile specified, but TLS disabled", .{});
+    if ((cert_file != null) != (key_file != null)) fatal("both certfile and keyfile need to be specified", .{});
 
     if (port == null) port = if (tls) 5671 else 5672;
 
@@ -321,7 +330,9 @@ pub fn main() !void {
         .host = host,
         .vhost = vhost,
         .auth = .{ .plain = .{ .username = user, .password = password } },
-        .ca_cert = ca_cert,
+        .ca_cert_path = ca_cert_file,
+        .cert_path = cert_file,
+        .key_path = key_file,
         .heartbeat = heartbeat,
     }, chan_settings);
 }
@@ -341,6 +352,8 @@ fn help() !void {
         \\  --password [password]     default: guest
         \\  --heartbeat [seconds]     default: 60 (0 to disable)
         \\  --cacertfile [path]       trusted root certificates file
+        \\  --certfile [path]         certificate file
+        \\  --keyfile [path]          private key file
         \\  --no-tls                  disable TLS
         \\Channel options:
         \\  --queue [name]            default: zone2json
