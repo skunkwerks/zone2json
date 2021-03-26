@@ -222,6 +222,10 @@ const ArgIterator = struct {
             return std.meta.stringToEnum(T, val) orelse fatal("invalid argument for option {s}", .{self.name});
         }
 
+        if (@typeInfo(T) == .Bool) {
+            return (std.meta.stringToEnum(enum{@"true", @"false"}, val) orelse fatal("invalid argument for option {s}", .{self.name})) == .@"true";
+        }
+
         @compileError("unimplemented type");
     }
 
@@ -249,11 +253,15 @@ pub fn main() !void {
     var vhost: [*:0]const u8 = "/";
     var user: [*:0]const u8 = "guest";
     var password: [*:0]const u8 = "guest";
+    var heartbeat: c_int = 60;
+
     var tls = true;
     var ca_cert_file: ?[*:0]const u8 = null;
     var cert_file: ?[*:0]const u8 = null;
     var key_file: ?[*:0]const u8 = null;
-    var heartbeat: c_int = 60;
+    var verify_peer: ?bool = null;
+    var fail_if_no_peer_cert: ?bool = null;
+    var verify_hostname: ?bool = null;
 
     var chan_settings = server.ChannelSettings{
         .queue = "zone2json",
@@ -299,6 +307,12 @@ pub fn main() !void {
             cert_file = val;
         } else if (args.get("keyfile", str)) |val| {
             key_file = val;
+        } else if (args.get("verify", enum{verify_peer, verify_none})) |val| {
+            verify_peer = val == .verify_peer;
+        } else if (args.get("fail_if_no_peer_cert", bool)) |val| {
+            fail_if_no_peer_cert = val;
+        } else if (args.get("verify_hostname", bool)) |val| {
+            verify_hostname = val;
         } else if (args.get("heartbeat", c_int)) |val| {
             heartbeat = val;
         } else if (args.get("queue", str)) |val| {
@@ -317,52 +331,69 @@ pub fn main() !void {
         }
     }
 
-    if (tls and ca_cert_file == null) fatal("specify a trusted root certificates file or disable TLS", .{});
-    if (!tls and ca_cert_file != null) fatal("cacertfile specified, but TLS disabled", .{});
-    if (!tls and cert_file != null) fatal("certfile specified, but TLS disabled", .{});
-    if (!tls and key_file != null) fatal("keyfile specified, but TLS disabled", .{});
-    if ((cert_file != null) != (key_file != null)) fatal("both certfile and keyfile need to be specified", .{});
+    if (tls and ca_cert_file == null)
+        fatal("specify a trusted root certificates file with cacertfile or disable TLS", .{});
 
-    if (port == null) port = if (tls) 5671 else 5672;
+    if (!tls and (ca_cert_file != null or cert_file != null or key_file != null or verify_peer != null or fail_if_no_peer_cert != null or verify_hostname != null))
+        fatal("TLS disabled, but TLS options specified", .{});
+
+    if ((cert_file != null) != (key_file != null))
+        fatal("both certfile and keyfile need to be specified or none at all", .{});
+
+    if ((verify_peer orelse true) != (fail_if_no_peer_cert orelse true))
+        fatal("if fail_if_no_peer_cert is specified, it must be true when verify=verify_peer and false when verify=verify_none", .{});
 
     try server.run(alloc, .{
-        .port = port.?,
+        .port = port orelse if (tls) @as(c_int, 5671) else 5672,
         .host = host,
         .vhost = vhost,
         .auth = .{ .plain = .{ .username = user, .password = password } },
-        .ca_cert_path = ca_cert_file,
-        .cert_path = cert_file,
-        .key_path = key_file,
         .heartbeat = heartbeat,
+        .tls = if (tls) .{
+            .ca_cert_path = ca_cert_file.?,
+            .keys = if (cert_file != null) .{
+                .cert_path = cert_file.?,
+                .key_path = key_file.?,
+            } else null,
+            .verify_peer = verify_peer orelse true,
+            .verify_hostname = verify_hostname orelse true,
+        } else null,
     }, chan_settings);
 }
 
 fn help() !void {
     try std.io.getStdOut().writeAll(
-        \\Usage: zone2json-server OPTIONS [URI]
+        \\Usage: zone2json-server [OPTIONS] [URI]
         \\An AMQP RPC server that converts DNS zones to JSON
         \\
         \\Options can also be passed in as URI query parameters (without "--").
         \\
         \\Connection options:
-        \\  --host [name]             default: localhost
-        \\  --port [port]             default: 5671 (with TLS) / 5672 (without TLS)
-        \\  --vhost [name]            default: /
-        \\  --user [name]             default: guest
-        \\  --password [password]     default: guest
-        \\  --heartbeat [seconds]     default: 60 (0 to disable)
-        \\  --cacertfile [path]       trusted root certificates file
-        \\  --certfile [path]         certificate file
-        \\  --keyfile [path]          private key file
+        \\  --host name             default: localhost
+        \\  --port number           default: 5671 (with TLS) / 5672 (without TLS)
+        \\  --vhost name            default: /
+        \\  --user name             default: guest
+        \\  --password password     default: guest
+        \\  --heartbeat seconds     default: 60 (0 to disable)
+        \\TLS options:
+        \\  --cacertfile path       trusted root certificates file
+        \\  --certfile path         certificate file
+        \\  --keyfile path          private key file
+        \\  --verify (verify_peer|verify_none)
+        \\      peer verification (default: verify_peer)
+        \\  --fail_if_no_peer_cert (true|false)
+        \\      Exists for compatibility. If set, must be true when verify=verify_peer and false when verify=verify_none.
+        \\  --verify_hostname (true|false)
+        \\      hostname verification (default: true)
         \\  --no-tls                  disable TLS
         \\Channel options:
-        \\  --queue [name]            default: zone2json
-        \\  --prefetch-count [count]  default: 10 (0 means unlimited)
-        \\  --batch [count]           Acknowledge in batches of size count (default: 10)
-        \\                            (sooner if there are no messages to process)
+        \\  --queue name            default: zone2json
+        \\  --prefetch-count count  default: 10 (0 means unlimited)
+        \\  --batch count           Acknowledge in batches of size count (default: 10)
+        \\                          (sooner if there are no messages to process)
         \\Other options:
-        \\  --log [syslog|stderr]     log output (default: syslog)
-        \\  --help                    display help and exit
+        \\  --log (syslog|stderr)   log output (default: syslog)
+        \\  --help                  display help and exit
         \\
     );
 }
