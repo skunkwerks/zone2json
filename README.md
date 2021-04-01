@@ -1,4 +1,6 @@
-An AMQP RPC server that converts DNS zone files to JSON.
+A BSD-licensed AMQP RPC server that converts DNS zone files to JSON.
+
+Tested on FreeBSD 12+ and Linux, using latest [zig] > 0.7.1 and < 0.8.0.
 
 `zone2json` receives standard RFC1035-style zonefiles and generates JSON
 format equivalents. This is available as either a standard command-line
@@ -32,5 +34,4 @@ zig build -Dstatic-ldns=... \
     -Dstatic-crypto=...
 ```
 
-Tested on FreeBSD 12+ and Linux.
-
+[zig]: https://zig-lang.org/
