@@ -1,6 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const testing = std.testing;
+const build_options = @import("build_options");
 const amqp = @import("zamqp");
 const server = @import("server.zig");
 
@@ -325,6 +326,9 @@ pub fn main() !void {
             tls = false;
         } else if (args.get("help", void)) {
             try help();
+            std.os.exit(0);
+        } else if (args.get("version", void)) {
+            try std.io.getStdOut().writeAll(build_options.version ++ "\n");
             std.os.exit(0);
         } else {
             fatal("unknown option: {s}", .{args.name});

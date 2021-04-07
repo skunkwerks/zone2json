@@ -8,6 +8,8 @@ var crypto_path: ?[]const u8 = undefined;
 var zamqp_path: []const u8 = undefined;
 var zdns_path: []const u8 = undefined;
 
+var version: []const u8 = undefined;
+
 pub fn build(b: *bld.Builder) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
@@ -26,6 +28,10 @@ pub fn build(b: *bld.Builder) !void {
 
     zamqp_path = b.option([]const u8, "zamqp", "path to zamqp.zig") orelse "../zamqp/src/zamqp.zig";
     zdns_path = b.option([]const u8, "zdns", "path to zdns.zig") orelse "../zdns/src/zdns.zig";
+
+    const version_override = b.option([]const u8, "version", "override version from git describe");
+    const git_describe_argv = &[_][]const u8{ "git", "-C", b.build_root, "describe", "--dirty", "--abbrev=7", "--tags", "--always", "--first-parent" };
+    version = version_override orelse std.mem.trim(u8, try b.exec(git_describe_argv), " \n\r");
 
     const server_exe = b.addExecutable("zone2json-server", "src/main.zig");
     const server_run_cmd = setupExe(b, server_exe, target, mode);
@@ -82,6 +88,8 @@ fn addDependencies(step: *bld.LibExeObjStep) void {
 }
 
 fn setupExe(b: *bld.Builder, exe: *bld.LibExeObjStep, target: std.zig.CrossTarget, mode: std.builtin.Mode) *bld.RunStep {
+    exe.addBuildOption([]const u8, "version", version);
+
     addDependencies(exe);
 
     exe.setTarget(target);
