@@ -224,7 +224,7 @@ const ArgIterator = struct {
         }
 
         if (@typeInfo(T) == .Bool) {
-            return (std.meta.stringToEnum(enum{@"true", @"false"}, val) orelse fatal("invalid argument for option {s}", .{self.name})) == .@"true";
+            return (std.meta.stringToEnum(enum { @"true", @"false" }, val) orelse fatal("invalid argument for option {s}", .{self.name})) == .@"true";
         }
 
         @compileError("unimplemented type");
@@ -308,7 +308,7 @@ pub fn main() !void {
             cert_file = val;
         } else if (args.get("keyfile", str)) |val| {
             key_file = val;
-        } else if (args.get("verify", enum{verify_peer, verify_none})) |val| {
+        } else if (args.get("verify", enum { verify_peer, verify_none })) |val| {
             verify_peer = val == .verify_peer;
         } else if (args.get("fail_if_no_peer_cert", bool)) |val| {
             fail_if_no_peer_cert = val;
