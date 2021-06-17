@@ -122,6 +122,8 @@ zig build -Dstatic-ldns=... \
 ### FreeBSD build/test instructions
 
 - yajl is used for JSON validation
+- if git is not available, add additional flag `-Dversion=...` with
+    appropriate version info
 
 ```
 $ sudo pkg install -r FreeBSD net/rabbitmq-c-devel dns/ldns devel/yajl
