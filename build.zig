@@ -89,6 +89,9 @@ fn addDependencies(step: *bld.LibExeObjStep) void {
 
 fn setupExe(b: *bld.Builder, exe: *bld.LibExeObjStep, target: std.zig.CrossTarget, mode: std.builtin.Mode) *bld.RunStep {
     exe.addBuildOption([]const u8, "version", version);
+    // add FreeBSD library paths
+    exe.addIncludeDir("/usr/local/include");
+    exe.addLibPath("/usr/local/lib");
 
     addDependencies(exe);
 
