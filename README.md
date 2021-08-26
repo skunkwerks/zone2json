@@ -126,7 +126,7 @@ zig build -Dstatic-ldns=... \
     appropriate version info
 
 ```
-$ sudo pkg install -r FreeBSD net/rabbitmq-c-devel dns/ldns devel/yajl
+$ sudo pkg install -r FreeBSD net/rabbitmq-c dns/ldns devel/yajl
 $ zig build \
     -Dstatic-ldns=/usr/local/lib/libldns.a \
     -Dstatic-rabbitmq=/usr/local/lib/librabbitmq.a
