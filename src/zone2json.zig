@@ -86,8 +86,8 @@ fn testRdf(type_: ldns.rdf_type, expected_out: []const u8, in: [*:0]const u8) !v
     var ctx = Context(@TypeOf(&out), @TypeOf(errStream.writer())){ .out = &out, .err_writer = errStream.writer(), .tmp_buf = buf };
 
     try emitRdf(rdf, &ctx);
-    testing.expectEqualStrings(expected_out, bufStream.getWritten());
-    testing.expectEqual(@as(usize, 0), errStream.getWritten().len);
+    try testing.expectEqualStrings(expected_out, bufStream.getWritten());
+    try testing.expectEqual(@as(usize, 0), errStream.getWritten().len);
 }
 
 test "emitRdf" {
@@ -103,7 +103,7 @@ test "emitRdf" {
     try testRdf(.PERIOD, "7464567", "7464567");
     try testRdf(.A, "\"192.168.1.1\"", "192.168.1.1");
 
-    testing.expectError(error.LdnsError, testRdf(.INT32, "", "bogus"));
+    try testing.expectError(error.LdnsError, testRdf(.INT32, "", "bogus"));
 }
 
 pub fn emitRr(rr: *ldns.rr, ctx: anytype) !void {
@@ -158,8 +158,8 @@ fn testRr(expected_out: []const u8, in: [*:0]const u8) !void {
     var ctx = Context(@TypeOf(&out), @TypeOf(errStream.writer())){ .out = &out, .err_writer = errStream.writer(), .tmp_buf = buf };
 
     try emitRr(rr, &ctx);
-    testing.expectEqualStrings(expected_out, bufStream.getWritten());
-    testing.expectEqual(@as(usize, 0), errStream.getWritten().len);
+    try testing.expectEqualStrings(expected_out, bufStream.getWritten());
+    try testing.expectEqual(@as(usize, 0), errStream.getWritten().len);
 }
 
 test "emitRr" {
@@ -193,7 +193,7 @@ test "emitRr" {
     ,
         \\minimal.com.	3600	IN	AAAA	2001:6a8:0:1:210:4bff:fe4b:4c61
     );
-    testing.expectError(error.LdnsError, testRr("", "bogus"));
+    try testing.expectError(error.LdnsError, testRr("", "bogus"));
 }
 
 pub fn emitZone(zone: *ldns.zone, ctx: anytype) !void {

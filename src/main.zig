@@ -120,56 +120,61 @@ test "UriQueryIterator" {
 
         {
             const p = (try it.next()).?;
-            testing.expectEqualStrings("asd", p.name);
-            testing.expectEqual(@as(?[:0]const u8, null), p.value);
+            try testing.expectEqualStrings("asd", p.name);
+            try testing.expectEqual(@as(?[:0]const u8, null), p.value);
         }
         {
             const p = (try it.next()).?;
-            testing.expectEqualStrings("qwe", p.name);
-            testing.expectEqualStrings("zxc", p.value.?);
+            try testing.expectEqualStrings("qwe", p.name);
+            try testing.expectEqualStrings("zxc", p.value.?);
         }
         {
             const p = (try it.next()).?;
-            testing.expectEqualStrings("=", p.name);
-            testing.expectEqualStrings("&", p.value.?);
+            try testing.expectEqualStrings("=", p.name);
+            try testing.expectEqualStrings("&", p.value.?);
         }
         {
             const p = (try it.next()).?;
-            testing.expectEqualStrings("a", p.name);
-            testing.expectEqualStrings("", p.value.?);
+            try testing.expectEqualStrings("a", p.name);
+            try testing.expectEqualStrings("", p.value.?);
         }
 
-        testing.expectEqual(@as(?UriQueryIterator.Param, null), try it.next());
+        try testing.expectEqual(@as(?UriQueryIterator.Param, null), try it.next());
+    }
+    {
+        var query = "".*;
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectEqual(@as(?UriQueryIterator.Param, null), try it.next());
     }
     {
         var query = "asd\x00asd".*;
-        var it = UriQueryIterator{ .query = query };
-        testing.expectError(error.BadUri, it.next());
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectError(error.BadUri, it.next());
     }
     {
         var query = "asd%00asd".*;
-        var it = UriQueryIterator{ .query = query };
-        testing.expectError(error.BadUri, it.next());
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectError(error.BadUri, it.next());
     }
     {
         var query = "asd%n0asd".*;
-        var it = UriQueryIterator{ .query = query };
-        testing.expectError(error.BadUri, it.next());
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectError(error.BadUri, it.next());
     }
     {
         var query = "asd%0".*;
-        var it = UriQueryIterator{ .query = query };
-        testing.expectError(error.BadUri, it.next());
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectError(error.BadUri, it.next());
     }
     {
         var query = "=asd".*;
-        var it = UriQueryIterator{ .query = query };
-        testing.expectError(error.BadUri, it.next());
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectError(error.BadUri, it.next());
     }
     {
         var query = "&asd".*;
-        var it = UriQueryIterator{ .query = query };
-        testing.expectError(error.BadUri, it.next());
+        var it = UriQueryIterator{ .query = &query };
+        try testing.expectError(error.BadUri, it.next());
     }
 }
 
