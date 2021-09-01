@@ -190,6 +190,12 @@ const ArgIterator = struct {
             }
         }
         if (self.cmdLineIterator.nextPosix()) |arg| {
+            if (mem.eql(u8, arg, "--uri-env")) {
+                const env_name = self.value([:0]const u8);
+                self.name = mem.span(std.c.getenv(env_name) orelse fatal("no URI environment variable '{s}'", .{env_name}));
+                self.val = null;
+                return .uri;
+            }
             if (mem.startsWith(u8, arg, "--")) {
                 self.name = arg;
                 self.val = null;
@@ -203,7 +209,7 @@ const ArgIterator = struct {
         return null;
     }
 
-    pub fn value(self: *ArgIterator, comptime T: type) T {
+    fn value(self: *ArgIterator, comptime T: type) T {
         const val = (self.val orelse blk: {
             if (self.uriIterator != null) fatal("missing argument for URI option {s}", .{self.name});
             self.val = self.cmdLineIterator.nextPosix() orelse fatal("missing argument for option {s}", .{self.name});
@@ -372,6 +378,8 @@ fn help() !void {
         \\
         \\Options can also be passed in as URI query parameters (without "--").
         \\
+        \\URI options:
+        \\  --uri-env VAR_NAME      Read URI from an environment variable.
         \\Connection options:
         \\  --host name             default: localhost
         \\  --port number           default: 5671 (with TLS) / 5672 (without TLS)
