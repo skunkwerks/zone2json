@@ -161,33 +161,55 @@ fn setupConnection(conn: amqp.Connection, settings: ConnectionSettings) !void {
     std.log.info("connection set up", .{});
 }
 
-fn exponentialBackoff(backoff: *i64, random: *std.rand.Random) void {
-    if (backoff.* == 0) {
-        // first time try again without waiting
-        backoff.* = 1000;
-        return;
+const ExponentialBackoff = struct {
+    ns: u64,
+    random: *std.rand.Random,
+    timer: std.time.Timer,
+
+    const min = 1 * std.time.ns_per_s;
+    const max = 32 * std.time.ns_per_s;
+    const jitter = 1 * std.time.ns_per_s;
+
+    pub fn init(random: *std.rand.Random) !ExponentialBackoff {
+        return ExponentialBackoff{
+            .timer = try std.time.Timer.start(),
+            .random = random,
+            .ns = min,
+        };
     }
 
-    const start = std.time.milliTimestamp();
-    var to_sleep: i64 = backoff.* + random.uintLessThanBiased(u32, 1000);
-    while (to_sleep > 1) {
-        std.time.sleep(@intCast(u64, to_sleep * std.time.ns_per_ms));
-        to_sleep -= std.time.milliTimestamp() - start;
+    pub fn sleep(self: *ExponentialBackoff) void {
+        self.timer.reset();
+        const to_sleep_ns: u64 = self.ns + self.random.uintLessThanBiased(u64, jitter);
+
+        std.time.sleep(@intCast(u64, to_sleep_ns));
+
+        while (true) {
+            const timer_val = self.timer.read();
+            if(timer_val >= to_sleep_ns) break;
+            // Spurious wakeup
+            std.time.sleep(@intCast(u64, to_sleep_ns - timer_val));
+        }
+
+        if (self.ns < max) self.ns *= 2;
     }
-    if (backoff.* < 32_000) backoff.* *= 2;
-}
+
+    pub fn reset(self: *ExponentialBackoff) void {
+        self.ns = min;
+    }
+};
 
 pub fn run(alloc: *std.mem.Allocator, con_settings: ConnectionSettings, chan_settings: ChannelSettings) !void {
     var conn = try amqp.Connection.new();
     defer conn.destroy() catch |err| logOrPanic(err);
 
-    var backoff_ms: i64 = 0;
     var rng = std.rand.DefaultPrng.init(std.crypto.random.int(u64));
+    var backoff = try ExponentialBackoff.init(&rng.random);
 
     connection: while (true) {
         setupConnection(conn, con_settings) catch |err| {
             logOrPanic(err);
-            exponentialBackoff(&backoff_ms, &rng.random);
+            backoff.sleep();
             continue :connection;
         };
         defer conn.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
@@ -196,7 +218,7 @@ pub fn run(alloc: *std.mem.Allocator, con_settings: ConnectionSettings, chan_set
             const channel = conn.channel(1);
             setupChannel(channel, chan_settings) catch |err| {
                 logOrPanic(err);
-                exponentialBackoff(&backoff_ms, &rng.random);
+                backoff.sleep();
                 continue :connection;
             };
             defer channel.close(.REPLY_SUCCESS) catch |err| logOrPanic(err);
@@ -206,11 +228,11 @@ pub fn run(alloc: *std.mem.Allocator, con_settings: ConnectionSettings, chan_set
             while (true) {
                 listen(alloc, channel, &state, chan_settings) catch |err| {
                     logOrPanic(err);
-                    exponentialBackoff(&backoff_ms, &rng.random);
+                    backoff.sleep();
                     if (err == error.ChannelClosed) continue :channel;
                     continue :connection;
                 };
-                backoff_ms = 0;
+                backoff.reset();
             }
         }
     }
